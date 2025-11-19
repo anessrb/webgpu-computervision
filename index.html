@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Object Detection with COCO-SSD</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.11.0/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 900px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 25px;
+            font-size: 0.9em;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            margin: 0 auto;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        video, canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .status {
+            text-align: center;
+            margin-top: 15px;
+            padding: 12px;
+            background: #f0f0f0;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #333;
+        }
+
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.ready {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            margin-top: 15px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .file-label {
+            background: #764ba2;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: inline-block;
+        }
+
+        .file-label:hover {
+            background: #653a8a;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(118, 75, 162, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Object Detection</h1>
+        <p class="subtitle">Powered by TensorFlow.js & COCO-SSD Model</p>
+        
+        <div class="controls">
+            <button id="webcamBtn">📹 Start Webcam</button>
+            <button id="stopBtn" disabled>⏹ Stop</button>
+            <label for="imageInput" class="file-label">🖼️ Upload Image</label>
+            <input type="file" id="imageInput" accept="image/*">
+        </div>
+
+        <div class="video-container">
+            <video id="video" playsinline autoplay muted></video>
+            <canvas id="canvas"></canvas>
+        </div>
+
+        <div id="status" class="status loading">Loading model...</div>
+
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-value" id="objectCount">0</div>
+                <div class="stat-label">Objects Detected</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="fps">0</div>
+                <div class="stat-label">FPS</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let model;
+        let video = document.getElementById('video');
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let isDetecting = false;
+        let stream = null;
+        let frameCount = 0;
+        let lastTime = Date.now();
+
+        // Load the model
+        async function loadModel() {
+            try {
+                model = await cocoSsd.load();
+                document.getElementById('status').textContent = 'Model loaded! Ready to detect objects.';
+                document.getElementById('status').className = 'status ready';
+            } catch (error) {
+                document.getElementById('status').textContent = 'Error loading model: ' + error.message;
+                document.getElementById('status').className = 'status';
+            }
+        }
+
+        // Start webcam
+        async function startWebcam() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user' },
+                    audio: false 
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    isDetecting = true;
+                    document.getElementById('webcamBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                    detectFrame();
+                };
+            } catch (error) {
+                alert('Error accessing webcam: ' + error.message);
+            }
+        }
+
+        // Stop webcam
+        function stopWebcam() {
+            isDetecting = false;
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('webcamBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('objectCount').textContent = '0';
+            document.getElementById('fps').textContent = '0';
+        }
+
+        // Detect objects in current frame
+        async function detectFrame() {
+            if (!isDetecting) return;
+
+            const predictions = await model.detect(video);
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw predictions
+            predictions.forEach(prediction => {
+                const [x, y, width, height] = prediction.bbox;
+                
+                // Draw bounding box
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(x, y, width, height);
+                
+                // Draw label background
+                ctx.fillStyle = '#00ff00';
+                const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+                const textWidth = ctx.measureText(label).width;
+                ctx.fillRect(x, y - 25, textWidth + 10, 25);
+                
+                // Draw label text
+                ctx.fillStyle = '#000000';
+                ctx.font = '16px Arial';
+                ctx.fillText(label, x + 5, y - 7);
+            });
+
+            // Update stats
+            document.getElementById('objectCount').textContent = predictions.length;
+            
+            // Calculate FPS
+            frameCount++;
+            const currentTime = Date.now();
+            if (currentTime - lastTime >= 1000) {
+                document.getElementById('fps').textContent = frameCount;
+                frameCount = 0;
+                lastTime = currentTime;
+            }
+
+            requestAnimationFrame(detectFrame);
+        }
+
+        // Handle image upload
+        async function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const img = new Image();
+            img.onload = async () => {
+                // Stop webcam if running
+                if (isDetecting) stopWebcam();
+
+                // Set canvas size to image size
+                canvas.width = img.width;
+                canvas.height = img.height;
+
+                // Draw image on canvas
+                ctx.drawImage(img, 0, 0);
+
+                // Detect objects
+                const predictions = await model.detect(img);
+
+                // Draw predictions
+                predictions.forEach(prediction => {
+                    const [x, y, width, height] = prediction.bbox;
+                    
+                    ctx.strokeStyle = '#00ff00';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(x, y, width, height);
+                    
+                    ctx.fillStyle = '#00ff00';
+                    const label = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+                    const textWidth = ctx.measureText(label).width;
+                    ctx.fillRect(x, y - 25, textWidth + 10, 25);
+                    
+                    ctx.fillStyle = '#000000';
+                    ctx.font = '16px Arial';
+                    ctx.fillText(label, x + 5, y - 7);
+                });
+
+                document.getElementById('objectCount').textContent = predictions.length;
+                document.getElementById('status').textContent = `Detected ${predictions.length} object(s) in image`;
+            };
+
+            img.src = URL.createObjectURL(file);
+        }
+
+        // Event listeners
+        document.getElementById('webcamBtn').addEventListener('click', startWebcam);
+        document.getElementById('stopBtn').addEventListener('click', stopWebcam);
+        document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+
+        // Initialize
+        loadModel();
+    </script>
+</body>
+</html>
